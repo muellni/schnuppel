@@ -1,10 +1,14 @@
-/* Snapcast client
+#include "schnuppel.h"
 
+#include "audio_mem.h"
+#include "esp_log.h"
+#include "esp_peripherals.h"
+#include "i2s_stream.h"
+#include "opus_decoder.h"
+#include "periph_wifi.h"
+#include "snapclient_stream.h"
 
-   Unless required by applicable law or agreed to in writing, this
-   software is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
-   CONDITIONS OF ANY KIND, either express or implied.
-*/
+#if 0
 
 #include <string.h>
 #include "freertos/FreeRTOS.h"
@@ -15,34 +19,24 @@
 #include "lwip/apps/sntp.h"
 
 
-#include "audio_element.h"
 #include "audio_pipeline.h"
 #include "audio_event_iface.h"
-#include "audio_mem.h"
 #include "audio_common.h"
 #include "board.h"
 #include "bt_app_core.h"
 #include "bt_app_av.h"
-#include "esp_log.h"
 #include "esp_a2dp_api.h"
 #include "esp_avrc_api.h"
 #include "esp_bt.h"
 #include "esp_bt_device.h"
 #include "esp_bt_main.h"
 #include "esp_gap_bt_api.h"
-#include "esp_peripherals.h"
 #include "esp_wifi.h"
-#include "i2s_stream.h"
 #include "filter_resample.h"
-#include "nvs_flash.h"
-#include "opus_decoder.h"
 #include "periph_touch.h"
 #include "periph_button.h"
 #include "periph_adc_button.h"
-#include "periph_wifi.h"
-#include "snapclient_stream.h"
 
-static const char *TAG = "SCHNUPPEL";
 #define HFP_RESAMPLE_RATE 16000
 
 static void wait_for_sntp(void)
@@ -73,127 +67,133 @@ enum {
 /* handler for bluetooth stack enabled events */
 static void bt_av_hdl_stack_evt(uint16_t event, void *p_param);
 
-void app_main(void)
+#endif
+
+schnuppel_handle_t schnuppel_init()
 {
-    audio_pipeline_handle_t pipeline;
-    audio_element_handle_t i2s_stream_writer, opus_decoder, snapclient_stream, bt_stream_reader;
+    schnuppel_handle_t result;
+    result = audio_calloc(1, sizeof(struct schnuppel_handle));
+    schnuppel_init_board(result);
+    schnuppel_init_pipeline(result);
+    schnuppel_init_snapclient(result);
+    schnuppel_init_opus(result);
+    schnuppel_init_i2s_stream(result);
+    schnuppel_init_pipeline_elements(result);
+    schnuppel_init_periph(result);
+    schnuppel_init_event(result);
+    return result;
+}
 
-	// setup logging
-    esp_log_level_set("*", ESP_LOG_INFO);
-    esp_log_level_set(TAG, ESP_LOG_INFO);
+void schnuppel_start(schnuppel_handle_t schnuppel)
+{
+    schnuppel_start_snapclient(schnuppel);
+    schnuppel_start_periph(schnuppel);
+}
 
-    /* Initialize NVS — it is used to store PHY calibration data */
-    esp_err_t err = nvs_flash_init();
-    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        err = nvs_flash_init();
-    }
-    ESP_ERROR_CHECK(err);
-    
-	ESP_ERROR_CHECK(esp_netif_init());
+void schnuppel_init_board(schnuppel_handle_t schnuppel)
+{
+    ESP_LOGI(TAG, "Start audio codec chip");
+    schnuppel->board = audio_board_init();
+    audio_hal_ctrl_codec(schnuppel->board->audio_hal, AUDIO_HAL_CODEC_MODE_BOTH, AUDIO_HAL_CTRL_START);
+}
 
-    ESP_LOGI(TAG, "[ 0 ] Bluetooth esp_bt_controller_mem_release");
-    ESP_ERROR_CHECK(esp_bt_controller_mem_release(ESP_BT_MODE_BLE));
-
-    ESP_LOGI(TAG, "[ 0 ] Bluetooth esp_bt_controller_init");
-    esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
-    if ((err = esp_bt_controller_init(&bt_cfg)) != ESP_OK) {
-        ESP_LOGE(BT_AV_TAG, "%s initialize controller failed: %s\n", __func__, esp_err_to_name(err));
-        return;
-    }
-
-    ESP_LOGI(TAG, "[ 0 ] Bluetooth esp_bt_controller_enable");
-    if ((err = esp_bt_controller_enable(ESP_BT_MODE_CLASSIC_BT)) != ESP_OK) {
-        ESP_LOGE(BT_AV_TAG, "%s enable controller failed: %s\n", __func__, esp_err_to_name(err));
-        return;
-    }
-
-    ESP_LOGI(TAG, "[ 0 ] Bluetooth esp_bluedroid_init");
-    if ((err = esp_bluedroid_init()) != ESP_OK) {
-        ESP_LOGE(BT_AV_TAG, "%s initialize bluedroid failed: %s\n", __func__, esp_err_to_name(err));
-        return;
-    }
-
-    ESP_LOGI(TAG, "[ 0 ] Bluetooth esp_bluedroid_enable");
-    if ((err = esp_bluedroid_enable()) != ESP_OK) {
-        ESP_LOGE(BT_AV_TAG, "%s enable bluedroid failed: %s\n", __func__, esp_err_to_name(err));
-        return;
-    }
-
-    ESP_LOGI(TAG, "[ 0 ] Bluetooth bt_app_task_start_up");
-    /* create application task */
-    bt_app_task_start_up();
-
-    ESP_LOGI(TAG, "[ 0 ] Bluetooth bt_app_work_dispatch");
-    /* Bluetooth device name, connection mode and profile set up */
-    bt_app_work_dispatch(bt_av_hdl_stack_evt, BT_APP_EVT_STACK_UP, NULL, 0, NULL);
-
-    /* Set default parameters for Secure Simple Pairing */
-    esp_bt_sp_param_t param_type = ESP_BT_SP_IOCAP_MODE;
-    esp_bt_io_cap_t iocap = ESP_BT_IO_CAP_IO;
-    esp_bt_gap_set_security_param(param_type, &iocap, sizeof(uint8_t));
-
-	// now setup the audio pipeline
-    ESP_LOGI(TAG, "[ 1 ] Start audio codec chip");
-    audio_board_handle_t board_handle = audio_board_init();
-    audio_hal_ctrl_codec(board_handle->audio_hal, AUDIO_HAL_CODEC_MODE_BOTH, AUDIO_HAL_CTRL_START);
-
-    ESP_LOGI(TAG, "[ 2 ] Create audio pipeline, add all elements to pipeline, and subscribe pipeline event");
+void schnuppel_init_pipeline(schnuppel_handle_t schnuppel)
+{
+    ESP_LOGI(TAG, "Create audio pipeline, add all elements to pipeline, and subscribe pipeline event");
     audio_pipeline_cfg_t pipeline_cfg = DEFAULT_AUDIO_PIPELINE_CONFIG();
-    pipeline = audio_pipeline_init(&pipeline_cfg);
-    mem_assert(pipeline);
+    schnuppel->pipeline = audio_pipeline_init(&pipeline_cfg);
+    mem_assert(schnuppel->pipeline);
+}
 
-    ESP_LOGI(TAG, "[2.0] Create snapclient source stream");
+void schnuppel_init_snapclient(schnuppel_handle_t schnuppel)
+{
+    ESP_LOGI(TAG, "Create snapclient source stream");
     snapclient_stream_cfg_t snapclient_cfg = SNAPCLIENT_STREAM_CFG_DEFAULT();
 	snapclient_cfg.port = CONFIG_SNAPSERVER_PORT;
 	snapclient_cfg.host = CONFIG_SNAPSERVER_HOST;
-	snapclient_cfg.audio_board = board_handle;
-	// TODO buff len & client name
-    snapclient_stream = snapclient_stream_init(&snapclient_cfg);
+	snapclient_cfg.audio_board = schnuppel->board;
+    schnuppel->snapclient_stream = snapclient_stream_init(&snapclient_cfg);
+}
 
-    //ESP_LOGI(TAG, "[2.1] Create opus decoder");
-    //opus_decoder_cfg_t opus_cfg = DEFAULT_OPUS_DECODER_CONFIG();
-    //opus_decoder = decoder_opus_init(&opus_cfg);
+void schnuppel_init_opus(schnuppel_handle_t schnuppel)
+{
+    ESP_LOGI(TAG, "reate opus decoder");
+    opus_decoder_cfg_t opus_cfg = DEFAULT_OPUS_DECODER_CONFIG();
+    schnuppel->opus_decoder = decoder_opus_init(&opus_cfg);
+}
 
-    ESP_LOGI(TAG, "[2.2] Create i2s stream to write data to codec chip");
+void schnuppel_init_i2s_stream(schnuppel_handle_t schnuppel)
+{
+    ESP_LOGI(TAG, "Create i2s stream to write data to codec chip");
     i2s_stream_cfg_t i2s_cfg = I2S_STREAM_CFG_DEFAULT();
     i2s_cfg.type = AUDIO_STREAM_WRITER;
-    i2s_stream_writer = i2s_stream_init(&i2s_cfg);
+    schnuppel->i2s_stream_writer = i2s_stream_init(&i2s_cfg);
+}
 
-    ESP_LOGI(TAG, "[2.3] Register all elements to audio pipeline");
-    audio_pipeline_register(pipeline, snapclient_stream, "snapclient");
-    //audio_pipeline_register(pipeline, bt_stream_reader, "bt");
-    //audio_pipeline_register(pipeline, opus_decoder, "opus");
-    audio_pipeline_register(pipeline, i2s_stream_writer, "i2s");
+void schnuppel_init_pipeline_elements(schnuppel_handle_t schnuppel)
+{
+    ESP_LOGI(TAG, "Register all elements to audio pipeline");
+    audio_pipeline_register(schnuppel->pipeline, schnuppel->snapclient_stream, "snapclient");
+    //audio_pipeline_register(schnuppel->pipeline, schnuppel->bt_stream_reader, "bt");
+    audio_pipeline_register(schnuppel->pipeline, schnuppel->opus_decoder, "opus");
+    audio_pipeline_register(schnuppel->pipeline, schnuppel->i2s_stream_writer, "i2s");
+}
 
-    ESP_LOGI(TAG, "[2.4] Link it together");
-
-    const char *link_tag[2] = {"snapclient", "i2s"};
-    audio_pipeline_link(pipeline, &link_tag[0], 2);
-
-    ESP_LOGI(TAG, "[ 3 ] Start and wait for Wi-Fi network");
+void schnuppel_init_periph(schnuppel_handle_t schnuppel)
+{
+    ESP_LOGI(TAG, "Initialize peripheral");
     esp_periph_config_t periph_cfg = DEFAULT_ESP_PERIPH_SET_CONFIG();
-    esp_periph_set_handle_t set = esp_periph_set_init(&periph_cfg);
-
-    ESP_LOGI(TAG, "[3.05] Initialize Touch peripheral");
-    audio_board_key_init(set);
+    schnuppel->periph_set = esp_periph_set_init(&periph_cfg);
+    ESP_LOGI(TAG, "Initialize Touch peripheral");
+    audio_board_key_init(schnuppel->periph_set);
 
     periph_wifi_cfg_t wifi_cfg = {
         .ssid = CONFIG_ESP_WIFI_SSID,
         .password = CONFIG_ESP_WIFI_PASSWORD,
     };
 
-    esp_periph_handle_t wifi_handle = periph_wifi_init(&wifi_cfg);
-    ESP_LOGI(TAG, "[3.1] Start the Wi-Fi network");
-    esp_periph_start(set, wifi_handle);
-    ESP_LOGI(TAG, "[3.2] wait for connection");
+    ESP_LOGI(TAG, "Initialize Wifi peripheral");
+    schnuppel->wifi_handle = periph_wifi_init(&wifi_cfg);
+}
 
+void schnuppel_init_event(schnuppel_handle_t schnuppel)
+{
+    ESP_LOGI(TAG, "Set up  event listener");
+    audio_event_iface_cfg_t evt_cfg = AUDIO_EVENT_IFACE_DEFAULT_CFG();
+    audio_event_iface_handle_t evt = audio_event_iface_init(&evt_cfg);
+
+    ESP_LOGI(TAG, "Listening event from all elements of pipeline");
+    audio_pipeline_set_listener(schnuppel->pipeline, evt);
+
+    ESP_LOGI(TAG, "Listening event from peripherals");
+    audio_event_iface_set_listener(esp_periph_set_get_event_iface(schnuppel->periph_set), evt);
+}
+
+void schnuppel_start_snapclient(schnuppel_handle_t schnuppel)
+{
+    ESP_LOGI(TAG, "Linking snapclient to audio pipeline");
+
+    const char *link_tag[2] = {"snapclient", "i2s"};
+    audio_pipeline_link(schnuppel->pipeline, &link_tag[0], 2);
+}
+
+void schnuppel_start_periph(schnuppel_handle_t schnuppel)
+{
+    ESP_LOGI(TAG, "Start the Wi-Fi network");
+    esp_periph_start(schnuppel->periph_set, schnuppel->wifi_handle);
+    ESP_LOGI(TAG, "wait for connection");
 	while (1) {
-		esp_err_t result = periph_wifi_wait_for_connected(wifi_handle, 2000 / portTICK_PERIOD_MS);
+		esp_err_t result = periph_wifi_wait_for_connected(schnuppel->wifi_handle, 2000 / portTICK_PERIOD_MS);
 		if (result == ESP_OK)
 			break;
-		ESP_LOGW(TAG, "[3.2] still waiting for connection");
+		ESP_LOGW(TAG, "still waiting for connection");
 	}
+}
+
+#if 0
+void app_main(void)
+{
+
 
 	// actually we don't really want to get not too big timestamps
 	// wait_for_sntp();
@@ -207,16 +207,6 @@ void app_main(void)
 
 	// XXX set up SNTP
 
-
-    ESP_LOGI(TAG, "[ 4 ] Set up  event listener");
-    audio_event_iface_cfg_t evt_cfg = AUDIO_EVENT_IFACE_DEFAULT_CFG();
-    audio_event_iface_handle_t evt = audio_event_iface_init(&evt_cfg);
-
-    ESP_LOGI(TAG, "[4.1] Listening event from all elements of pipeline");
-    audio_pipeline_set_listener(pipeline, evt);
-
-    ESP_LOGI(TAG, "[4.2] Listening event from peripherals");
-    audio_event_iface_set_listener(esp_periph_set_get_event_iface(set), evt);
 
     ESP_LOGI(TAG, "[ 5 ] Start audio_pipeline");
     audio_pipeline_run(pipeline);
@@ -464,3 +454,4 @@ static void bt_av_hdl_stack_evt(uint16_t event, void *p_param)
         break;
     }
 }
+#endif
