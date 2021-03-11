@@ -54,7 +54,11 @@ typedef struct {
 #define SNAPCLIENT_STREAM_BUF_SIZE          (4096)
 #define SNAPCLIENT_STREAM_TASK_PRIO         (5)
 #define SNAPCLIENT_STREAM_TASK_CORE         (0)
-#define SNAPCLIENT_STREAM_CLIENT_NAME       ("esp32")
+#if defined(CONFIG_SNAPCLIENT_NAME)
+# define SNAPCLIENT_STREAM_CLIENT_NAME       CONFIG_SNAPCLIENT_NAME
+#else
+# define SNAPCLIENT_STREAM_CLIENT_NAME       ("esp32")
+#endif
 #define SNAPCLIENT_STREAM_RINGBUFFER_SIZE     (20 * 1024)
 
 #define SNAPCLIENT_STREAM_CFG_DEFAULT() {              \
