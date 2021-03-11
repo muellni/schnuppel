@@ -1,10 +1,15 @@
 #include "schnuppel.h"
 
+#include <sys/time.h>
+
 #include "audio_mem.h"
 #include "esp_log.h"
 #include "esp_peripherals.h"
 #include "i2s_stream.h"
 #include "opus_decoder.h"
+#include "periph_adc_button.h"
+#include "periph_button.h"
+#include "periph_touch.h"
 #include "periph_wifi.h"
 #include "snapclient_stream.h"
 
@@ -88,6 +93,8 @@ void schnuppel_start(schnuppel_handle_t schnuppel)
 {
     schnuppel_start_snapclient(schnuppel);
     schnuppel_start_periph(schnuppel);
+    schnuppel_start_time(schnuppel);
+    schnuppel_start_pipeline(schnuppel);
 }
 
 void schnuppel_init_board(schnuppel_handle_t schnuppel)
@@ -160,13 +167,13 @@ void schnuppel_init_event(schnuppel_handle_t schnuppel)
 {
     ESP_LOGI(TAG, "Set up  event listener");
     audio_event_iface_cfg_t evt_cfg = AUDIO_EVENT_IFACE_DEFAULT_CFG();
-    audio_event_iface_handle_t evt = audio_event_iface_init(&evt_cfg);
+    schnuppel->event_handle = audio_event_iface_init(&evt_cfg);
 
     ESP_LOGI(TAG, "Listening event from all elements of pipeline");
-    audio_pipeline_set_listener(schnuppel->pipeline, evt);
+    audio_pipeline_set_listener(schnuppel->pipeline, schnuppel->event_handle);
 
     ESP_LOGI(TAG, "Listening event from peripherals");
-    audio_event_iface_set_listener(esp_periph_set_get_event_iface(schnuppel->periph_set), evt);
+    audio_event_iface_set_listener(esp_periph_set_get_event_iface(schnuppel->periph_set), schnuppel->event_handle);
 }
 
 void schnuppel_start_snapclient(schnuppel_handle_t schnuppel)
@@ -190,204 +197,187 @@ void schnuppel_start_periph(schnuppel_handle_t schnuppel)
 	}
 }
 
-#if 0
-void app_main(void)
+void schnuppel_start_time(schnuppel_handle_t schnuppel)
 {
-
-
-	// actually we don't really want to get not too big timestamps
-	// wait_for_sntp();
-
 	struct timeval now;
 	if (gettimeofday(&now, NULL)) {
 		ESP_LOGW(TAG, "Failed to gettimeofday");
 	} else {
 		ESP_LOGI(TAG, "Current timestamp is %ld.%ld", now.tv_sec, now.tv_usec);
 	}
+}
 
-	// XXX set up SNTP
+void schnuppel_start_pipeline(schnuppel_handle_t schnuppel)
+{
+    ESP_LOGI(TAG, "Start audio_pipeline");
+    audio_pipeline_run(schnuppel->pipeline);
 
+	i2s_stream_set_clk(schnuppel->i2s_stream_writer, 48000 , 16, 2);
+}
 
-    ESP_LOGI(TAG, "[ 5 ] Start audio_pipeline");
-    audio_pipeline_run(pipeline);
+void schnuppel_handle_event(schnuppel_handle_t schnuppel)
+{
+    audio_event_iface_msg_t msg;
+    char source[20];
+    ESP_LOGI(TAG, "[ X ] Waiting for a new message");
+    esp_err_t ret = audio_event_iface_listen(schnuppel->event_handle, &msg, portMAX_DELAY);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "[ * ] Event interface error : %d", ret);
+        return;
+    }
+    //if (msg.source == (void *) opus_decoder)
+    //	sprintf(source, "%s", "opus");
+    //else
+    if (msg.source == (void *) schnuppel->snapclient_stream)
+        sprintf(source, "%s", "snapclient");
+    else if (msg.source == (void *) schnuppel->i2s_stream_writer)
+        sprintf(source, "%s", "i2s");
+    else
+        sprintf(source, "%s", "unknown");
 
-	i2s_stream_set_clk(i2s_stream_writer, 48000 , 16, 2);
-
-    while (1) {
-		/*
-        AEL_MSG_CMD_NONE                = 0,
-        AEL_MSG_CMD_ERROR               = 1,
-        AEL_MSG_CMD_FINISH              = 2,
-        AEL_MSG_CMD_STOP                = 3,
-        AEL_MSG_CMD_PAUSE               = 4,
-        AEL_MSG_CMD_RESUME              = 5,
-        AEL_MSG_CMD_DESTROY             = 6,
-        // AEL_MSG_CMD_CHANGE_STATE        = 7,
-        AEL_MSG_CMD_REPORT_STATUS       = 8,
-        AEL_MSG_CMD_REPORT_MUSIC_INFO   = 9,
-        AEL_MSG_CMD_REPORT_CODEC_FMT    = 10,
-        AEL_MSG_CMD_REPORT_POSITION     = 11,
-		*/
-		char source[20];
-
-        audio_event_iface_msg_t msg;
-		ESP_LOGI(TAG, "[ X ] Waiting for a new message");
-        esp_err_t ret = audio_event_iface_listen(evt, &msg, portMAX_DELAY);
-        if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "[ * ] Event interface error : %d", ret);
-            continue;
-        }
-		//if (msg.source == (void *) opus_decoder)
-		//	sprintf(source, "%s", "opus");
-		//else
-		if (msg.source == (void *) snapclient_stream)
-			sprintf(source, "%s", "snapclient");
-		else if (msg.source == (void *) i2s_stream_writer)
-			sprintf(source, "%s", "i2s");
-		else
-			sprintf(source, "%s", "unknown");
-
-		ESP_LOGI(TAG, "[ X ] Event message %d:%d from %s", msg.source_type, msg.cmd, source);
-		if (msg.cmd == AEL_MSG_CMD_REPORT_STATUS)
-			switch ( (int) msg.data ) {
-				case AEL_STATUS_NONE:
-					ESP_LOGI(TAG, "[ X ]   status AEL_STATUS_NONE");
-					break;
-				case AEL_STATUS_ERROR_OPEN:
-					ESP_LOGI(TAG, "[ X ]   status AEL_STATUS_ERROR_OPEN");
-					break;
-				case AEL_STATUS_ERROR_INPUT:
-					ESP_LOGI(TAG, "[ X ]   status AEL_STATUS_ERROR_INPUT");
-					break;
-				case AEL_STATUS_ERROR_PROCESS:
-					ESP_LOGI(TAG, "[ X ]   status AEL_STATUS_ERROR_PROCESS");
-					break;
-				case AEL_STATUS_ERROR_OUTPUT:
-					ESP_LOGI(TAG, "[ X ]   status AEL_STATUS_ERROR_OUTPUT");
-					break;
-				case AEL_STATUS_ERROR_CLOSE:
-					ESP_LOGI(TAG, "[ X ]   status AEL_STATUS_ERROR_CLOSE");
-					break;
-				case AEL_STATUS_ERROR_TIMEOUT:
-					ESP_LOGI(TAG, "[ X ]   status AEL_STATUS_ERROR_TIMEOUT");
-					break;
-				case AEL_STATUS_ERROR_UNKNOWN:
-					ESP_LOGI(TAG, "[ X ]   status AEL_STATUS_ERROR_UNKNOWN");
-					break;
-				case AEL_STATUS_INPUT_DONE:
-					ESP_LOGI(TAG, "[ X ]   status AEL_STATUS_INPUT_DONE");
-					break;
-				case AEL_STATUS_INPUT_BUFFERING:
-					ESP_LOGI(TAG, "[ X ]   status AEL_STATUS_INPUT_BUFFERING");
-					break;
-				case AEL_STATUS_OUTPUT_DONE:
-					ESP_LOGI(TAG, "[ X ]   status AEL_STATUS_OUTPUT_DONE");
-					break;
-				case AEL_STATUS_OUTPUT_BUFFERING:
-					ESP_LOGI(TAG, "[ X ]   status AEL_STATUS_OUTPUT_BUFFERING");
-					break;
-				case AEL_STATUS_STATE_RUNNING:
-					ESP_LOGI(TAG, "[ X ]   status AEL_STATUS_STATE_RUNNING");
-					break;
-				case AEL_STATUS_STATE_PAUSED:
-					ESP_LOGI(TAG, "[ X ]   status AEL_STATUS_STATE_PAUSED");
-					break;
-				case AEL_STATUS_STATE_STOPPED:
-					ESP_LOGI(TAG, "[ X ]   status AEL_STATUS_STATE_STOPPED");
-					break;
-				case AEL_STATUS_STATE_FINISHED:
-					ESP_LOGI(TAG, "[ X ]   status AEL_STATUS_STATE_FINISHED");
-					break;
-				case AEL_STATUS_MOUNTED:
-					ESP_LOGI(TAG, "[ X ]   status AEL_STATUS_MOUNTED");
-					break;
-				case AEL_STATUS_UNMOUNTED:
-					ESP_LOGI(TAG, "[ X ]   status AEL_STATUS_UNMOUNTED");
-					break;
-			}
-
-        if (msg.source_type == AUDIO_ELEMENT_TYPE_ELEMENT
-			&& msg.source == (void *) snapclient_stream
-            && msg.cmd == AEL_MSG_CMD_REPORT_MUSIC_INFO) {
-			ESP_LOGI(TAG, "[ X ] report music info ");
-            audio_element_info_t music_info = {0};
-            audio_element_getinfo(snapclient_stream, &music_info);
-
-            ESP_LOGI(TAG, "[ * ] Receive music info from snapclient decoder, sample_rates=%d, bits=%d, ch=%d",
-                     music_info.sample_rates, music_info.bits, music_info.channels);
-
-            //audio_element_setinfo(opus_decoder, &music_info);
-            audio_element_setinfo(i2s_stream_writer, &music_info);
-
-            i2s_stream_set_clk(i2s_stream_writer, music_info.sample_rates , music_info.bits, music_info.channels);
-            continue;
+    ESP_LOGI(TAG, "[ X ] Event message %d:%d from %s", msg.source_type, msg.cmd, source);
+    if (msg.cmd == AEL_MSG_CMD_REPORT_STATUS)
+        switch ( (int) msg.data ) {
+            case AEL_STATUS_NONE:
+                ESP_LOGI(TAG, "[ X ]   status AEL_STATUS_NONE");
+                break;
+            case AEL_STATUS_ERROR_OPEN:
+                ESP_LOGI(TAG, "[ X ]   status AEL_STATUS_ERROR_OPEN");
+                break;
+            case AEL_STATUS_ERROR_INPUT:
+                ESP_LOGI(TAG, "[ X ]   status AEL_STATUS_ERROR_INPUT");
+                break;
+            case AEL_STATUS_ERROR_PROCESS:
+                ESP_LOGI(TAG, "[ X ]   status AEL_STATUS_ERROR_PROCESS");
+                break;
+            case AEL_STATUS_ERROR_OUTPUT:
+                ESP_LOGI(TAG, "[ X ]   status AEL_STATUS_ERROR_OUTPUT");
+                break;
+            case AEL_STATUS_ERROR_CLOSE:
+                ESP_LOGI(TAG, "[ X ]   status AEL_STATUS_ERROR_CLOSE");
+                break;
+            case AEL_STATUS_ERROR_TIMEOUT:
+                ESP_LOGI(TAG, "[ X ]   status AEL_STATUS_ERROR_TIMEOUT");
+                break;
+            case AEL_STATUS_ERROR_UNKNOWN:
+                ESP_LOGI(TAG, "[ X ]   status AEL_STATUS_ERROR_UNKNOWN");
+                break;
+            case AEL_STATUS_INPUT_DONE:
+                ESP_LOGI(TAG, "[ X ]   status AEL_STATUS_INPUT_DONE");
+                break;
+            case AEL_STATUS_INPUT_BUFFERING:
+                ESP_LOGI(TAG, "[ X ]   status AEL_STATUS_INPUT_BUFFERING");
+                break;
+            case AEL_STATUS_OUTPUT_DONE:
+                ESP_LOGI(TAG, "[ X ]   status AEL_STATUS_OUTPUT_DONE");
+                break;
+            case AEL_STATUS_OUTPUT_BUFFERING:
+                ESP_LOGI(TAG, "[ X ]   status AEL_STATUS_OUTPUT_BUFFERING");
+                break;
+            case AEL_STATUS_STATE_RUNNING:
+                ESP_LOGI(TAG, "[ X ]   status AEL_STATUS_STATE_RUNNING");
+                break;
+            case AEL_STATUS_STATE_PAUSED:
+                ESP_LOGI(TAG, "[ X ]   status AEL_STATUS_STATE_PAUSED");
+                break;
+            case AEL_STATUS_STATE_STOPPED:
+                ESP_LOGI(TAG, "[ X ]   status AEL_STATUS_STATE_STOPPED");
+                break;
+            case AEL_STATUS_STATE_FINISHED:
+                ESP_LOGI(TAG, "[ X ]   status AEL_STATUS_STATE_FINISHED");
+                break;
+            case AEL_STATUS_MOUNTED:
+                ESP_LOGI(TAG, "[ X ]   status AEL_STATUS_MOUNTED");
+                break;
+            case AEL_STATUS_UNMOUNTED:
+                ESP_LOGI(TAG, "[ X ]   status AEL_STATUS_UNMOUNTED");
+                break;
         }
 
-        if ((msg.source_type == PERIPH_ID_TOUCH || msg.source_type == PERIPH_ID_BUTTON || msg.source_type == PERIPH_ID_ADC_BTN)
-            && (msg.cmd == PERIPH_TOUCH_TAP || msg.cmd == PERIPH_BUTTON_PRESSED || msg.cmd == PERIPH_ADC_BUTTON_PRESSED)) {
+    if (msg.source_type == AUDIO_ELEMENT_TYPE_ELEMENT
+        && msg.source == (void *) schnuppel->snapclient_stream
+        && msg.cmd == AEL_MSG_CMD_REPORT_MUSIC_INFO) {
+        ESP_LOGI(TAG, "[ X ] report music info ");
+        audio_element_info_t music_info = {0};
+        audio_element_getinfo(schnuppel->snapclient_stream, &music_info);
 
-            if ((int) msg.data == get_input_play_id()) {
-                ESP_LOGI(TAG, "[ * ] [Play] touch tap event");
-            } else if ((int) msg.data == get_input_set_id()) {
-                ESP_LOGI(TAG, "[ * ] [Set] touch tap event");
-            } else if ((int) msg.data == get_input_volup_id()) {
-                ESP_LOGI(TAG, "[ * ] [Vol+] touch tap event");
-            } else if ((int) msg.data == get_input_voldown_id()) {
-                ESP_LOGI(TAG, "[ * ] [Vol-] touch tap event");
-            }
-        }
+        ESP_LOGI(TAG, "[ * ] Receive music info from snapclient decoder, sample_rates=%d, bits=%d, ch=%d",
+                    music_info.sample_rates, music_info.bits, music_info.channels);
 
-		/*
-        if (msg.source_type == AUDIO_ELEMENT_TYPE_ELEMENT && msg.source == (void *) opus_decoder
-            && msg.cmd == AEL_MSG_CMD_REPORT_MUSIC_INFO) {
-			ESP_LOGI(TAG, "[ X ] opus message ");
-            audio_element_info_t music_info = {0};
-            audio_element_getinfo(opus_decoder, &music_info);
+        //audio_element_setinfo(opus_decoder, &music_info);
+        audio_element_setinfo(schnuppel->i2s_stream_writer, &music_info);
 
-            ESP_LOGI(TAG, "[ * ] Receive music info from opus decoder, sample_rates=%d, bits=%d, ch=%d",
-                     music_info.sample_rates, music_info.bits, music_info.channels);
+        i2s_stream_set_clk(schnuppel->i2s_stream_writer, music_info.sample_rates , music_info.bits, music_info.channels);
+        return;
+    }
 
-            audio_element_setinfo(i2s_stream_writer, &music_info);
+    if ((msg.source_type == PERIPH_ID_TOUCH || msg.source_type == PERIPH_ID_BUTTON || msg.source_type == PERIPH_ID_ADC_BTN)
+        && (msg.cmd == PERIPH_TOUCH_TAP || msg.cmd == PERIPH_BUTTON_PRESSED || msg.cmd == PERIPH_ADC_BUTTON_PRESSED)) {
 
-            i2s_stream_set_clk(i2s_stream_writer, music_info.sample_rates , music_info.bits, music_info.channels);
-            continue;
-        }
-		*/
-        /* Stop when the last pipeline element (i2s_stream_writer in this case) receives stop event */
-        if (msg.source_type == AUDIO_ELEMENT_TYPE_ELEMENT && msg.source == (void *) i2s_stream_writer
-            && msg.cmd == AEL_MSG_CMD_REPORT_STATUS
-            && (((int)msg.data == AEL_STATUS_STATE_STOPPED) || ((int)msg.data == AEL_STATUS_STATE_FINISHED))) {
-			ESP_LOGI(TAG, "[ X ] i2s wants to stop!");
-
-            //break;
+        if ((int) msg.data == get_input_play_id()) {
+            ESP_LOGI(TAG, "[ * ] [Play] touch tap event");
+        } else if ((int) msg.data == get_input_set_id()) {
+            ESP_LOGI(TAG, "[ * ] [Set] touch tap event");
+        } else if ((int) msg.data == get_input_volup_id()) {
+            ESP_LOGI(TAG, "[ * ] [Vol+] touch tap event");
+        } else if ((int) msg.data == get_input_voldown_id()) {
+            ESP_LOGI(TAG, "[ * ] [Vol-] touch tap event");
         }
     }
 
-    ESP_LOGI(TAG, "[ 5 ] Stop audio_pipeline");
-    audio_pipeline_stop(pipeline);
-    audio_pipeline_wait_for_stop(pipeline);
-    audio_pipeline_terminate(pipeline);
+    if (msg.source_type == AUDIO_ELEMENT_TYPE_ELEMENT && msg.source == (void *) schnuppel->opus_decoder
+        && msg.cmd == AEL_MSG_CMD_REPORT_MUSIC_INFO) {
+        ESP_LOGI(TAG, "[ X ] opus message ");
+        audio_element_info_t music_info = {0};
+        audio_element_getinfo(schnuppel->opus_decoder, &music_info);
 
-	audio_pipeline_unregister(pipeline, snapclient_stream);
-    //audio_pipeline_unregister(pipeline, opus_decoder);
-    audio_pipeline_unregister(pipeline, i2s_stream_writer);
+        ESP_LOGI(TAG, "[ * ] Receive music info from opus decoder, sample_rates=%d, bits=%d, ch=%d",
+                    music_info.sample_rates, music_info.bits, music_info.channels);
+
+        audio_element_setinfo(schnuppel->i2s_stream_writer, &music_info);
+
+        i2s_stream_set_clk(schnuppel->i2s_stream_writer, music_info.sample_rates , music_info.bits, music_info.channels);
+        return;
+    }
+
+    /* Stop when the last pipeline element (i2s_stream_writer in this case) receives stop event */
+    if (msg.source_type == AUDIO_ELEMENT_TYPE_ELEMENT && msg.source == (void *) schnuppel->i2s_stream_writer
+        && msg.cmd == AEL_MSG_CMD_REPORT_STATUS
+        && (((int)msg.data == AEL_STATUS_STATE_STOPPED) || ((int)msg.data == AEL_STATUS_STATE_FINISHED))) {
+        ESP_LOGI(TAG, "i2s wants to stop!");
+        schnuppel_stop(schnuppel);
+    }
+}
+
+void schnuppel_stop(schnuppel_handle_t schnuppel)
+{
+    ESP_LOGI(TAG, "Stop audio_pipeline");
+    audio_pipeline_stop(schnuppel->pipeline);
+    audio_pipeline_wait_for_stop(schnuppel->pipeline);
+    audio_pipeline_terminate(schnuppel->pipeline);
+
+	audio_pipeline_unregister(schnuppel->pipeline, schnuppel->snapclient_stream);
+    audio_pipeline_unregister(schnuppel->pipeline, schnuppel->opus_decoder);
+    audio_pipeline_unregister(schnuppel->pipeline, schnuppel->i2s_stream_writer);
 
     /* Terminate the pipeline before removing the listener */
-    audio_pipeline_remove_listener(pipeline);
+    audio_pipeline_remove_listener(schnuppel->pipeline);
 
     /* Make sure audio_pipeline_remove_listener is called before destroying event_iface */
-    audio_event_iface_destroy(evt);
+    audio_event_iface_destroy(schnuppel->event_handle);
 
     /* Release all resources */
 	/* D: still neeeded?
     audio_pipeline_unregister(pipeline, i2s_stream_writer);
     audio_pipeline_unregister(pipeline, opus_decoder);
 	*/
-    audio_pipeline_deinit(pipeline);
-    audio_element_deinit(i2s_stream_writer);
-    //audio_element_deinit(opus_decoder);
-    audio_element_deinit(snapclient_stream);
+    audio_pipeline_deinit(schnuppel->pipeline);
+    audio_element_deinit(schnuppel->i2s_stream_writer);
+    audio_element_deinit(schnuppel->opus_decoder);
+    audio_element_deinit(schnuppel->snapclient_stream);
 }
+
+#if 0
 
 void bt_app_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param)
 {

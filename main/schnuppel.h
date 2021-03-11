@@ -12,6 +12,7 @@ struct schnuppel_handle {
     audio_board_handle_t board;
     esp_periph_set_handle_t periph_set;
     esp_periph_handle_t wifi_handle;
+    audio_event_iface_handle_t event_handle;
 };
 
 typedef struct schnuppel_handle *schnuppel_handle_t;
@@ -39,3 +40,11 @@ void schnuppel_init_event(schnuppel_handle_t schnuppel);
 void schnuppel_start_snapclient(schnuppel_handle_t schnuppel);
 
 void schnuppel_start_periph(schnuppel_handle_t schnuppel);
+
+void schnuppel_start_time(schnuppel_handle_t schnuppel);
+
+void schnuppel_start_pipeline(schnuppel_handle_t schnuppel);
+
+void schnuppel_handle_event(schnuppel_handle_t schnuppel);
+
+void schnuppel_stop(schnuppel_handle_t schnuppel);

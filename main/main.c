@@ -23,4 +23,7 @@ void app_main(void)
 
     schnuppel_handle_t schnuppel = schnuppel_init();
     schnuppel_start(schnuppel);
+    while(1) {
+        schnuppel_handle_event(schnuppel);
+    }
 }
