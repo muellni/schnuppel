@@ -1,4 +1,2 @@
-set(COMPONENT_SRCS "snapclient.c")
-set(COMPONENT_ADD_INCLUDEDIRS "")
-
-register_component()
+idf_component_register(SRCS "schnuppel.c" "bt_app_av.c" "bt_app_core.c"
+                       REQUIRES bluetooth_service snapclient_stream)

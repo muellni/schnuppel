@@ -14,33 +14,36 @@
 #include "lwip/err.h"
 #include "lwip/apps/sntp.h"
 
-#include "esp_log.h"
-#include "esp_wifi.h"
 
 #include "audio_element.h"
 #include "audio_pipeline.h"
 #include "audio_event_iface.h"
 #include "audio_mem.h"
 #include "audio_common.h"
+#include "board.h"
+#include "bt_app_core.h"
+#include "bt_app_av.h"
+#include "esp_log.h"
+#include "esp_a2dp_api.h"
+#include "esp_avrc_api.h"
+#include "esp_bt.h"
+#include "esp_bt_device.h"
+#include "esp_bt_main.h"
+#include "esp_gap_bt_api.h"
+#include "esp_peripherals.h"
+#include "esp_wifi.h"
 #include "i2s_stream.h"
-#include "snapclient_stream.h"
-#include "opus_decoder.h"
 #include "filter_resample.h"
+#include "nvs_flash.h"
+#include "opus_decoder.h"
 #include "periph_touch.h"
 #include "periph_button.h"
 #include "periph_adc_button.h"
-
-#include "nvs_flash.h"
-
-#include "esp_peripherals.h"
 #include "periph_wifi.h"
-#include "board.h"
+#include "snapclient_stream.h"
 
-static const char *TAG = "SNAPCAST";
-/*
-   To embed it in the app binary, the mp3 file is named
-   in the component.mk COMPONENT_EMBED_TXTFILES variable.
-*/
+static const char *TAG = "SCHNUPPEL";
+#define HFP_RESAMPLE_RATE 16000
 
 static void wait_for_sntp(void)
 {
@@ -62,32 +65,78 @@ static void wait_for_sntp(void)
     }
 }
 
+/* event for handler "bt_av_hdl_stack_up */
+enum {
+    BT_APP_EVT_STACK_UP = 0,
+};
+
+/* handler for bluetooth stack enabled events */
+static void bt_av_hdl_stack_evt(uint16_t event, void *p_param);
 
 void app_main(void)
 {
     audio_pipeline_handle_t pipeline;
-    audio_element_handle_t i2s_stream_writer, opus_decoder, snapclient_stream;
+    audio_element_handle_t i2s_stream_writer, opus_decoder, snapclient_stream, bt_stream_reader;
 
 	// setup logging
     esp_log_level_set("*", ESP_LOG_INFO);
     esp_log_level_set(TAG, ESP_LOG_INFO);
 
-	// flash init
-    esp_err_t ret = nvs_flash_init();
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-      ESP_ERROR_CHECK(nvs_flash_erase());
-      ret = nvs_flash_init();
+    /* Initialize NVS — it is used to store PHY calibration data */
+    esp_err_t err = nvs_flash_init();
+    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        err = nvs_flash_init();
     }
-    ESP_ERROR_CHECK(ret);
-	// for IDF >= 4.1.0
-	// ESP_ERROR_CHECK(esp_netif_init()); does not work, fall back to bw compat libs
-	tcpip_adapter_init();
+    ESP_ERROR_CHECK(err);
+    
+	ESP_ERROR_CHECK(esp_netif_init());
 
-	// now setip the audio pipeline
+    ESP_LOGI(TAG, "[ 0 ] Bluetooth esp_bt_controller_mem_release");
+    ESP_ERROR_CHECK(esp_bt_controller_mem_release(ESP_BT_MODE_BLE));
+
+    ESP_LOGI(TAG, "[ 0 ] Bluetooth esp_bt_controller_init");
+    esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
+    if ((err = esp_bt_controller_init(&bt_cfg)) != ESP_OK) {
+        ESP_LOGE(BT_AV_TAG, "%s initialize controller failed: %s\n", __func__, esp_err_to_name(err));
+        return;
+    }
+
+    ESP_LOGI(TAG, "[ 0 ] Bluetooth esp_bt_controller_enable");
+    if ((err = esp_bt_controller_enable(ESP_BT_MODE_CLASSIC_BT)) != ESP_OK) {
+        ESP_LOGE(BT_AV_TAG, "%s enable controller failed: %s\n", __func__, esp_err_to_name(err));
+        return;
+    }
+
+    ESP_LOGI(TAG, "[ 0 ] Bluetooth esp_bluedroid_init");
+    if ((err = esp_bluedroid_init()) != ESP_OK) {
+        ESP_LOGE(BT_AV_TAG, "%s initialize bluedroid failed: %s\n", __func__, esp_err_to_name(err));
+        return;
+    }
+
+    ESP_LOGI(TAG, "[ 0 ] Bluetooth esp_bluedroid_enable");
+    if ((err = esp_bluedroid_enable()) != ESP_OK) {
+        ESP_LOGE(BT_AV_TAG, "%s enable bluedroid failed: %s\n", __func__, esp_err_to_name(err));
+        return;
+    }
+
+    ESP_LOGI(TAG, "[ 0 ] Bluetooth bt_app_task_start_up");
+    /* create application task */
+    bt_app_task_start_up();
+
+    ESP_LOGI(TAG, "[ 0 ] Bluetooth bt_app_work_dispatch");
+    /* Bluetooth device name, connection mode and profile set up */
+    bt_app_work_dispatch(bt_av_hdl_stack_evt, BT_APP_EVT_STACK_UP, NULL, 0, NULL);
+
+    /* Set default parameters for Secure Simple Pairing */
+    esp_bt_sp_param_t param_type = ESP_BT_SP_IOCAP_MODE;
+    esp_bt_io_cap_t iocap = ESP_BT_IO_CAP_IO;
+    esp_bt_gap_set_security_param(param_type, &iocap, sizeof(uint8_t));
+
+	// now setup the audio pipeline
     ESP_LOGI(TAG, "[ 1 ] Start audio codec chip");
     audio_board_handle_t board_handle = audio_board_init();
     audio_hal_ctrl_codec(board_handle->audio_hal, AUDIO_HAL_CODEC_MODE_BOTH, AUDIO_HAL_CTRL_START);
-	//audio_hal_set_volume(board_handle->audio_hal, 30);
 
     ESP_LOGI(TAG, "[ 2 ] Create audio pipeline, add all elements to pipeline, and subscribe pipeline event");
     audio_pipeline_cfg_t pipeline_cfg = DEFAULT_AUDIO_PIPELINE_CONFIG();
@@ -113,6 +162,7 @@ void app_main(void)
 
     ESP_LOGI(TAG, "[2.3] Register all elements to audio pipeline");
     audio_pipeline_register(pipeline, snapclient_stream, "snapclient");
+    //audio_pipeline_register(pipeline, bt_stream_reader, "bt");
     //audio_pipeline_register(pipeline, opus_decoder, "opus");
     audio_pipeline_register(pipeline, i2s_stream_writer, "i2s");
 
@@ -347,4 +397,70 @@ void app_main(void)
     audio_element_deinit(i2s_stream_writer);
     //audio_element_deinit(opus_decoder);
     audio_element_deinit(snapclient_stream);
+}
+
+void bt_app_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param)
+{
+    switch (event) {
+    case ESP_BT_GAP_AUTH_CMPL_EVT: {
+        if (param->auth_cmpl.stat == ESP_BT_STATUS_SUCCESS) {
+            ESP_LOGI(BT_AV_TAG, "authentication success: %s", param->auth_cmpl.device_name);
+            esp_log_buffer_hex(BT_AV_TAG, param->auth_cmpl.bda, ESP_BD_ADDR_LEN);
+        } else {
+            ESP_LOGE(BT_AV_TAG, "authentication failed, status:%d", param->auth_cmpl.stat);
+        }
+        break;
+    }
+    case ESP_BT_GAP_CFM_REQ_EVT:
+        ESP_LOGI(BT_AV_TAG, "ESP_BT_GAP_CFM_REQ_EVT Please compare the numeric value: %d", param->cfm_req.num_val);
+        esp_bt_gap_ssp_confirm_reply(param->cfm_req.bda, true);
+        break;
+    case ESP_BT_GAP_KEY_NOTIF_EVT:
+        ESP_LOGI(BT_AV_TAG, "ESP_BT_GAP_KEY_NOTIF_EVT passkey:%d", param->key_notif.passkey);
+        break;
+    case ESP_BT_GAP_KEY_REQ_EVT:
+        ESP_LOGI(BT_AV_TAG, "ESP_BT_GAP_KEY_REQ_EVT Please enter passkey!");
+        break;
+    default: {
+        ESP_LOGI(BT_AV_TAG, "event: %d", event);
+        break;
+    }
+    }
+    return;
+}
+static void bt_av_hdl_stack_evt(uint16_t event, void *p_param)
+{
+    ESP_LOGD(BT_AV_TAG, "%s evt %d", __func__, event);
+    switch (event) {
+    case BT_APP_EVT_STACK_UP: {
+        /* set up device name */
+        char *dev_name = "Schnuppel";
+        esp_bt_dev_set_device_name(dev_name);
+
+        esp_bt_gap_register_callback(bt_app_gap_cb);
+
+        /* initialize AVRCP controller */
+        esp_avrc_ct_init();
+        esp_avrc_ct_register_callback(bt_app_rc_ct_cb);
+        /* initialize AVRCP target */
+        assert (esp_avrc_tg_init() == ESP_OK);
+        esp_avrc_tg_register_callback(bt_app_rc_tg_cb);
+
+        esp_avrc_rn_evt_cap_mask_t evt_set = {0};
+        esp_avrc_rn_evt_bit_mask_operation(ESP_AVRC_BIT_MASK_OP_SET, &evt_set, ESP_AVRC_RN_VOLUME_CHANGE);
+        assert(esp_avrc_tg_set_rn_evt_cap(&evt_set) == ESP_OK);
+
+        /* initialize A2DP sink */
+        esp_a2d_register_callback(&bt_app_a2d_cb);
+        esp_a2d_sink_register_data_callback(bt_app_a2d_data_cb);
+        esp_a2d_sink_init();
+
+        /* set discoverable and connectable mode, wait to be connected */
+        esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
+        break;
+    }
+    default:
+        ESP_LOGE(BT_AV_TAG, "%s unhandled evt %d", __func__, event);
+        break;
+    }
 }
