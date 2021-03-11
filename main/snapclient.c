@@ -95,6 +95,7 @@ void app_main(void)
     snapclient_stream_cfg_t snapclient_cfg = SNAPCLIENT_STREAM_CFG_DEFAULT();
 	snapclient_cfg.port = CONFIG_SNAPSERVER_PORT;
 	snapclient_cfg.host = CONFIG_SNAPSERVER_HOST;
+	snapclient_cfg.audio_board = board_handle;
 	// TODO buff len & client name
     snapclient_stream = snapclient_stream_init(&snapclient_cfg);
 

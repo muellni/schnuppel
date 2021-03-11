@@ -5,6 +5,7 @@
 #include "audio_error.h"
 #include "audio_element.h"
 #include "esp_transport.h"
+#include "board.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -44,6 +45,7 @@ typedef struct {
     bool                        ext_stack;          /*!< Allocate stack on extern ram */
     snapclient_stream_event_handle_cb  event_handler;      /*!< snapclient stream event callback*/
     void                        *event_ctx;         /*!< User context*/
+    audio_board_handle_t        audio_board;
 } snapclient_stream_cfg_t;
 
 #define SNAPCLIENT_DEFAULT_PORT             (1704)
@@ -67,6 +69,7 @@ typedef struct {
     .ext_stack     = true,                      \
     .event_handler = NULL,                      \
     .event_ctx     = NULL,                      \
+    .audio_board   = NULL,                       \
 }
 
 

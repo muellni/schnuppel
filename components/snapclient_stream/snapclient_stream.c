@@ -35,6 +35,7 @@ typedef struct snapclient_stream {
 	wire_chunk_message_t wire_chunk_message;
 	server_settings_message_t server_settings_message;
 	time_message_t time_message;
+    audio_board_handle_t audio_board;
 
 } snapclient_stream_t;
 
@@ -497,20 +498,10 @@ static esp_err_t _snapclient_process(audio_element_handle_t self, char *in_buffe
 				ESP_LOGI(TAG, "Latency:        %d", snapclient->server_settings_message.latency);
 				ESP_LOGI(TAG, "Mute:           %d", snapclient->server_settings_message.muted);
 				ESP_LOGI(TAG, "Setting volume: %d", snapclient->server_settings_message.volume);
-				/* XXX manage mute
-				muteCH[0] = server_settings_message.muted;
-				muteCH[1] = server_settings_message.muted;
-				muteCH[2] = server_settings_message.muted;
-				muteCH[3] = server_settings_message.muted;
-				*/
 
 				// Volume setting using ADF HAL abstraction
-				//audio_hal_set_volume(board_handle->audio_hal,server_settings_message.volume);
-				// move this implemntation to a Merus Audio hal
-				//uint8_t cmd[4];
-				//cmd[0] = 128-server_settings_message.volume  ;
-				//cmd[1] = cmd[0];
-				//ma_write(0x20,1,0x0040,cmd,1);
+				audio_hal_set_volume(snapclient->audio_board->audio_hal, snapclient->server_settings_message.volume);
+				
 				break;
 
 			case SNAPCAST_MESSAGE_TIME:
@@ -647,6 +638,7 @@ audio_element_handle_t snapclient_stream_init(snapclient_stream_cfg_t *config)
     snapclient->port = config->port;
     snapclient->host = config->host;
     snapclient->timeout_ms = config->timeout_ms;
+    snapclient->audio_board = config->audio_board;
 
     if (config->event_handler) {
         snapclient->hook = config->event_handler;
