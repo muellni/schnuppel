@@ -45,7 +45,7 @@ void schnuppel_event_handle(schnuppel_handle_t schnuppel)
         return;
     }
 
-    if (msg.source == (void *) schnuppel->i2s_stream_writer) {
+    if (msg.source == (void *) schnuppel->i2s_stream_writer_bt || msg.source == (void *) schnuppel->i2s_stream_writer_snapclient) {
         handled = schnuppel_event_handle_i2s_stream_writer(schnuppel, msg);
     } else if (msg.source == (void *) schnuppel->snapclient_stream) {
         handled = schnuppel_event_handle_snapclient_stream(schnuppel, msg);
@@ -136,9 +136,11 @@ bool schnuppel_event_handle_audio_element_type(schnuppel_handle_t schnuppel, aud
         ESP_LOGI(TAG, "  receive music info: sample_rates=%d, bits=%d, ch=%d",
                     music_info.sample_rates, music_info.bits, music_info.channels);
 
-        audio_element_setinfo(schnuppel->i2s_stream_writer, &music_info);
+        audio_element_setinfo(schnuppel->i2s_stream_writer_bt, &music_info);
+        audio_element_setinfo(schnuppel->i2s_stream_writer_snapclient, &music_info);
 
-        i2s_stream_set_clk(schnuppel->i2s_stream_writer, music_info.sample_rates , music_info.bits, music_info.channels);
+        i2s_stream_set_clk(schnuppel->i2s_stream_writer_bt, music_info.sample_rates , music_info.bits, music_info.channels);
+        i2s_stream_set_clk(schnuppel->i2s_stream_writer_snapclient, music_info.sample_rates , music_info.bits, music_info.channels);
         return true;
     } else {
         ESP_LOGI(TAG, "  unhandled event ");

@@ -27,6 +27,9 @@ schnuppel_handle_t schnuppel_init()
     schnuppel_init_opus(schnuppel);
     schnuppel_init_periph(schnuppel);
     schnuppel_init_event(schnuppel);
+    schnuppel_init_pipeline(schnuppel);
+    schnuppel_init_pipeline_elements(schnuppel);    
+
     return schnuppel;
 }
 
@@ -39,10 +42,12 @@ void schnuppel_init_board(schnuppel_handle_t schnuppel)
 
 void schnuppel_init_pipeline(schnuppel_handle_t schnuppel)
 {
-    ESP_LOGI(TAG, "Create audio pipeline");
+    ESP_LOGI(TAG, "Create audio pipelines");
     audio_pipeline_cfg_t pipeline_cfg = DEFAULT_AUDIO_PIPELINE_CONFIG();
-    schnuppel->pipeline = audio_pipeline_init(&pipeline_cfg);
-    mem_assert(schnuppel->pipeline);
+    schnuppel->pipeline_bt = audio_pipeline_init(&pipeline_cfg);
+    mem_assert(schnuppel->pipeline_bt);
+    schnuppel->pipeline_snapclient = audio_pipeline_init(&pipeline_cfg);
+    mem_assert(schnuppel->pipeline_snapclient);
 }
 
 void schnuppel_init_bt(schnuppel_handle_t schnuppel)
@@ -96,28 +101,26 @@ void schnuppel_init_i2s_stream(schnuppel_handle_t schnuppel)
     ESP_LOGI(TAG, "Create i2s stream to write data to codec chip");
     i2s_stream_cfg_t i2s_cfg = I2S_STREAM_CFG_DEFAULT();
     i2s_cfg.type = AUDIO_STREAM_WRITER;
-    schnuppel->i2s_stream_writer = i2s_stream_init(&i2s_cfg);
+    schnuppel->i2s_stream_writer_bt = i2s_stream_init(&i2s_cfg);
+    schnuppel->i2s_stream_writer_snapclient = i2s_stream_init(&i2s_cfg);
 }
 
 void schnuppel_init_pipeline_elements(schnuppel_handle_t schnuppel)
 {
     ESP_LOGI(TAG, "Register all elements to audio pipeline");
-    if (schnuppel->snapclient_stream)
-    {
-        audio_pipeline_register(schnuppel->pipeline, schnuppel->snapclient_stream, "snapclient");
-    }
-    if (schnuppel->opus_decoder)
-    {
-        audio_pipeline_register(schnuppel->pipeline, schnuppel->opus_decoder, "opus");
-    }
-    if (schnuppel->i2s_stream_writer)
-    {
-        audio_pipeline_register(schnuppel->pipeline, schnuppel->i2s_stream_writer, "i2s");
-    }
-    if (schnuppel->bt_stream_reader)
-    {
-        audio_pipeline_register(schnuppel->pipeline, schnuppel->bt_stream_reader, "bt");
-    }
+    audio_pipeline_register(schnuppel->pipeline_snapclient, schnuppel->snapclient_stream, "snapclient");
+    audio_pipeline_register(schnuppel->pipeline_snapclient, schnuppel->opus_decoder, "opus");
+    audio_pipeline_register(schnuppel->pipeline_snapclient, schnuppel->i2s_stream_writer_snapclient, "i2ssnap");
+    const char *link_tag_snapclient[2] = {"snapclient", "i2ssnap"};
+    audio_pipeline_link(schnuppel->pipeline_snapclient, &link_tag_snapclient[0], 2);
+    audio_pipeline_set_listener(schnuppel->pipeline_snapclient, schnuppel->event_handle);
+    
+    audio_pipeline_register(schnuppel->pipeline_bt, schnuppel->bt_stream_reader, "bt");
+    audio_pipeline_register(schnuppel->pipeline_bt, schnuppel->i2s_stream_writer_bt, "i2sbt");
+    const char *link_tag_bt[2] = {"bt", "i2sbt"};
+    audio_pipeline_link(schnuppel->pipeline_bt, &link_tag_bt[0], 2);
+
+    audio_pipeline_set_listener(schnuppel->pipeline_bt, schnuppel->event_handle);
 }
 
 void schnuppel_init_periph(schnuppel_handle_t schnuppel)

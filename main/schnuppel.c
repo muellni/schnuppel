@@ -24,34 +24,28 @@ void schnuppel_start(schnuppel_handle_t schnuppel)
 {
     schnuppel_start_periph(schnuppel);
     schnuppel_start_time(schnuppel);
+    audio_pipeline_run(schnuppel->pipeline_bt);
+    audio_pipeline_pause(schnuppel->pipeline_bt);
+    audio_pipeline_run(schnuppel->pipeline_snapclient);
 }
 
 void schnuppel_switch_mode(schnuppel_handle_t schnuppel, enum SchnuppelMode mode)
 {
-    schnuppel_stop(schnuppel);
-
-    schnuppel_init_pipeline(schnuppel);
-
-    schnuppel_init_pipeline_elements(schnuppel);    
-
-    audio_pipeline_set_listener(schnuppel->pipeline, schnuppel->event_handle);
-    
     switch (mode) {
         case SCHNUPPEL_MODE_BT:
             {
-                const char *link_tag[2] = {"bt", "i2s"};
-                audio_pipeline_link(schnuppel->pipeline, &link_tag[0], 2);
+                audio_pipeline_pause(schnuppel->pipeline_snapclient);
+                audio_pipeline_resume(schnuppel->pipeline_bt);
             }
             break;
         case SCHNUPPEL_MODE_SNAPCLIENT:
             {
-                const char *link_tag[2] = {"snapclient", "i2s"};
-                audio_pipeline_link(schnuppel->pipeline, &link_tag[0], 2);
+                audio_pipeline_pause(schnuppel->pipeline_bt);
+                audio_pipeline_resume(schnuppel->pipeline_snapclient);
             }
             break;
     }
-
-    schnuppel_start_pipeline(schnuppel);
+    schnuppel->mode = mode;
 }
 
 void schnuppel_start_periph(schnuppel_handle_t schnuppel)
@@ -88,14 +82,15 @@ void schnuppel_start_time(schnuppel_handle_t schnuppel)
 void schnuppel_start_pipeline(schnuppel_handle_t schnuppel)
 {
     ESP_LOGI(TAG, "Start audio_pipeline");
-    audio_pipeline_run(schnuppel->pipeline);
+    //audio_pipeline_run(schnuppel->pipeline);
 
-	i2s_stream_set_clk(schnuppel->i2s_stream_writer, 48000 , 16, 2);
+	//i2s_stream_set_clk(schnuppel->i2s_stream_writer, 48000 , 16, 2);
 }
 
 
 void schnuppel_stop(schnuppel_handle_t schnuppel)
 {
+    /*
     if (schnuppel->pipeline)
     {
         ESP_LOGW(TAG, "Stop audio_pipeline");
@@ -106,6 +101,7 @@ void schnuppel_stop(schnuppel_handle_t schnuppel)
         audio_pipeline_deinit(schnuppel->pipeline);
         schnuppel->pipeline = NULL;
     }
+    */
 
     /*
     a2dp_destroy();
@@ -138,10 +134,12 @@ void schnuppel_stop(schnuppel_handle_t schnuppel)
     }
     */
     
+    /*
     if (schnuppel->pipeline)
     {
         audio_pipeline_deinit(schnuppel->pipeline);
     }
+    */
 }
 
 void schnuppel_uninit(schnuppel_handle_t schnuppel)

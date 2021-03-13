@@ -12,8 +12,9 @@ enum SchnuppelMode {
 };
 
 struct schnuppel_handle {
-    audio_pipeline_handle_t pipeline;
-    audio_element_handle_t i2s_stream_writer, opus_decoder, snapclient_stream, bt_stream_reader;
+    audio_pipeline_handle_t pipeline_bt;
+    audio_pipeline_handle_t pipeline_snapclient;
+    audio_element_handle_t i2s_stream_writer_bt, i2s_stream_writer_snapclient, opus_decoder, snapclient_stream, bt_stream_reader;
     audio_board_handle_t board;
     esp_periph_set_handle_t periph_set;
     esp_periph_handle_t wifi_handle;
