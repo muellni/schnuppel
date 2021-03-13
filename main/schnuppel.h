@@ -47,4 +47,16 @@ void schnuppel_start_pipeline(schnuppel_handle_t schnuppel);
 
 void schnuppel_handle_event(schnuppel_handle_t schnuppel);
 
+bool schnuppel_handle_event_audio_element_type(schnuppel_handle_t schnuppel, audio_event_iface_msg_t msg);
+
+bool schnuppel_handle_event_button_down(schnuppel_handle_t schnuppel, audio_event_iface_msg_t msg);
+
+bool schnuppel_handle_event_i2s_stream_writer(schnuppel_handle_t schnuppel, audio_event_iface_msg_t msg);
+
+bool schnuppel_handle_event_snapclient_stream(schnuppel_handle_t schnuppel, audio_event_iface_msg_t msg);
+
+bool schnuppel_handle_event_opus_decoder(schnuppel_handle_t schnuppel, audio_event_iface_msg_t msg);
+
+bool schnuppel_handle_event_bt_stream_reader(schnuppel_handle_t schnuppel, audio_event_iface_msg_t msg);
+
 void schnuppel_stop(schnuppel_handle_t schnuppel);

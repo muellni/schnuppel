@@ -13,67 +13,6 @@
 #include "periph_wifi.h"
 #include "snapclient_stream.h"
 
-#if 0
-
-#include <string.h>
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include "freertos/event_groups.h"
-
-#include "lwip/err.h"
-#include "lwip/apps/sntp.h"
-
-
-#include "audio_pipeline.h"
-#include "audio_event_iface.h"
-#include "audio_common.h"
-#include "board.h"
-#include "bt_app_core.h"
-#include "bt_app_av.h"
-#include "esp_a2dp_api.h"
-#include "esp_avrc_api.h"
-#include "esp_bt.h"
-#include "esp_bt_device.h"
-#include "esp_bt_main.h"
-#include "esp_gap_bt_api.h"
-#include "esp_wifi.h"
-#include "filter_resample.h"
-#include "periph_touch.h"
-#include "periph_button.h"
-#include "periph_adc_button.h"
-
-#define HFP_RESAMPLE_RATE 16000
-
-static void wait_for_sntp(void)
-{
-    time_t now = 0;
-    struct tm timeinfo = { 0 };
-    int retry = 0;
-
-    ESP_LOGI(TAG, "Initializing SNTP");
-    sntp_setoperatingmode(SNTP_OPMODE_POLL);
-    sntp_setservername(0, "europe.pool.ntp.org");
-    sntp_init();
-
-    const int retry_count = 20;
-    while (timeinfo.tm_year < (2016 - 1900) && ++retry < retry_count) {
-        ESP_LOGI(TAG, "Waiting for system time to be set... (%d/%d)", retry, retry_count);
-        vTaskDelay(2000 / portTICK_PERIOD_MS);
-        time(&now);
-        localtime_r(&now, &timeinfo);
-    }
-}
-
-/* event for handler "bt_av_hdl_stack_up */
-enum {
-    BT_APP_EVT_STACK_UP = 0,
-};
-
-/* handler for bluetooth stack enabled events */
-static void bt_av_hdl_stack_evt(uint16_t event, void *p_param);
-
-#endif
-
 schnuppel_handle_t schnuppel_init()
 {
     schnuppel_handle_t result;
@@ -218,25 +157,50 @@ void schnuppel_start_pipeline(schnuppel_handle_t schnuppel)
 void schnuppel_handle_event(schnuppel_handle_t schnuppel)
 {
     audio_event_iface_msg_t msg;
-    char source[20];
-    ESP_LOGI(TAG, "[ X ] Waiting for a new message");
+    ESP_LOGI(TAG, "Handle event: Waiting for a new message");
     esp_err_t ret = audio_event_iface_listen(schnuppel->event_handle, &msg, portMAX_DELAY);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "[ * ] Event interface error : %d", ret);
+        ESP_LOGE(TAG, "Handle event: Event interface error : %d", ret);
         return;
     }
-    //if (msg.source == (void *) opus_decoder)
-    //	sprintf(source, "%s", "opus");
-    //else
-    if (msg.source == (void *) schnuppel->snapclient_stream)
-        sprintf(source, "%s", "snapclient");
-    else if (msg.source == (void *) schnuppel->i2s_stream_writer)
-        sprintf(source, "%s", "i2s");
-    else
-        sprintf(source, "%s", "unknown");
 
-    ESP_LOGI(TAG, "[ X ] Event message %d:%d from %s", msg.source_type, msg.cmd, source);
-    if (msg.cmd == AEL_MSG_CMD_REPORT_STATUS)
+    bool handled = false;
+
+    switch (msg.source_type) {
+        case AUDIO_ELEMENT_TYPE_ELEMENT:
+            handled = schnuppel_handle_event_audio_element_type(schnuppel, msg);
+            break;
+        case PERIPH_ID_TOUCH:
+        case PERIPH_ID_BUTTON:
+        case PERIPH_ID_ADC_BTN:
+            if (msg.cmd == PERIPH_TOUCH_TAP || msg.cmd == PERIPH_BUTTON_PRESSED || msg.cmd == PERIPH_ADC_BUTTON_PRESSED){
+                handled = schnuppel_handle_event_button_down(schnuppel, msg);
+            }
+            break;
+    }
+
+    if (handled) {
+        return;
+    }
+
+    if (msg.source == (void *) schnuppel->i2s_stream_writer) {
+        handled = schnuppel_handle_event_i2s_stream_writer(schnuppel, msg);
+    } else if (msg.source == (void *) schnuppel->snapclient_stream) {
+        handled = schnuppel_handle_event_snapclient_stream(schnuppel, msg);
+    } else if (msg.source == (void *) schnuppel->opus_decoder) {
+        handled = schnuppel_handle_event_opus_decoder(schnuppel, msg);
+    } else if (msg.source == (void *) schnuppel->bt_stream_reader) {
+        handled = schnuppel_handle_event_bt_stream_reader(schnuppel, msg);
+    }
+    else {
+        ESP_LOGE(TAG, "Handle event: unknown source");
+    }
+
+    if (handled) {
+        return;
+    }
+
+    if (msg.cmd == AEL_MSG_CMD_REPORT_STATUS) {
         switch ( (int) msg.data ) {
             case AEL_STATUS_NONE:
                 ESP_LOGI(TAG, "[ X ]   status AEL_STATUS_NONE");
@@ -293,60 +257,81 @@ void schnuppel_handle_event(schnuppel_handle_t schnuppel)
                 ESP_LOGI(TAG, "[ X ]   status AEL_STATUS_UNMOUNTED");
                 break;
         }
+    }
+}
 
-    if (msg.source_type == AUDIO_ELEMENT_TYPE_ELEMENT
-        && msg.source == (void *) schnuppel->snapclient_stream
-        && msg.cmd == AEL_MSG_CMD_REPORT_MUSIC_INFO) {
-        ESP_LOGI(TAG, "[ X ] report music info ");
+bool schnuppel_handle_event_audio_element_type(schnuppel_handle_t schnuppel, audio_event_iface_msg_t msg)
+{
+    ESP_LOGI(TAG, "Handle event: Processing message AUDIO_ELEMENT_TYPE_ELEMENT");
+
+    if (msg.cmd == AEL_MSG_CMD_REPORT_MUSIC_INFO) {
+        ESP_LOGI(TAG, "  report music info ");
         audio_element_info_t music_info = {0};
-        audio_element_getinfo(schnuppel->snapclient_stream, &music_info);
+        audio_element_getinfo(msg.source, &music_info);
 
-        ESP_LOGI(TAG, "[ * ] Receive music info from snapclient decoder, sample_rates=%d, bits=%d, ch=%d",
-                    music_info.sample_rates, music_info.bits, music_info.channels);
-
-        //audio_element_setinfo(opus_decoder, &music_info);
+        //audio_element_setinfo(schnuppel->opus_decoder, &music_info);
         audio_element_setinfo(schnuppel->i2s_stream_writer, &music_info);
 
         i2s_stream_set_clk(schnuppel->i2s_stream_writer, music_info.sample_rates , music_info.bits, music_info.channels);
-        return;
+        return true;
+    } else {
+        ESP_LOGI(TAG, "  unhandled event ");
+    }
+    return false;
+}
+
+bool schnuppel_handle_event_button_down(schnuppel_handle_t schnuppel, audio_event_iface_msg_t msg)
+{
+    ESP_LOGI(TAG, "Handle event: Processing message AUDIO_ELEMENT_TYPE_ELEMENT");
+
+    if ((int) msg.data == get_input_play_id()) {
+        ESP_LOGI(TAG, "[ * ] [Play] touch tap event");
+        return true;
+    } else if ((int) msg.data == get_input_set_id()) {
+        ESP_LOGI(TAG, "[ * ] [Set] touch tap event");
+        return true;
+    } else if ((int) msg.data == get_input_volup_id()) {
+        ESP_LOGI(TAG, "[ * ] [Vol+] touch tap event");
+        return true;
+    } else if ((int) msg.data == get_input_voldown_id()) {
+        ESP_LOGI(TAG, "[ * ] [Vol-] touch tap event");
+        return true;
     }
 
-    if ((msg.source_type == PERIPH_ID_TOUCH || msg.source_type == PERIPH_ID_BUTTON || msg.source_type == PERIPH_ID_ADC_BTN)
-        && (msg.cmd == PERIPH_TOUCH_TAP || msg.cmd == PERIPH_BUTTON_PRESSED || msg.cmd == PERIPH_ADC_BUTTON_PRESSED)) {
+    return false;
+}
 
-        if ((int) msg.data == get_input_play_id()) {
-            ESP_LOGI(TAG, "[ * ] [Play] touch tap event");
-        } else if ((int) msg.data == get_input_set_id()) {
-            ESP_LOGI(TAG, "[ * ] [Set] touch tap event");
-        } else if ((int) msg.data == get_input_volup_id()) {
-            ESP_LOGI(TAG, "[ * ] [Vol+] touch tap event");
-        } else if ((int) msg.data == get_input_voldown_id()) {
-            ESP_LOGI(TAG, "[ * ] [Vol-] touch tap event");
-        }
-    }
-
-    if (msg.source_type == AUDIO_ELEMENT_TYPE_ELEMENT && msg.source == (void *) schnuppel->opus_decoder
-        && msg.cmd == AEL_MSG_CMD_REPORT_MUSIC_INFO) {
-        ESP_LOGI(TAG, "[ X ] opus message ");
-        audio_element_info_t music_info = {0};
-        audio_element_getinfo(schnuppel->opus_decoder, &music_info);
-
-        ESP_LOGI(TAG, "[ * ] Receive music info from opus decoder, sample_rates=%d, bits=%d, ch=%d",
-                    music_info.sample_rates, music_info.bits, music_info.channels);
-
-        audio_element_setinfo(schnuppel->i2s_stream_writer, &music_info);
-
-        i2s_stream_set_clk(schnuppel->i2s_stream_writer, music_info.sample_rates , music_info.bits, music_info.channels);
-        return;
-    }
+bool schnuppel_handle_event_i2s_stream_writer(schnuppel_handle_t schnuppel, audio_event_iface_msg_t msg)
+{
+    ESP_LOGI(TAG, "Handle event: Processing message from i2s_stream_writer ");
 
     /* Stop when the last pipeline element (i2s_stream_writer in this case) receives stop event */
-    if (msg.source_type == AUDIO_ELEMENT_TYPE_ELEMENT && msg.source == (void *) schnuppel->i2s_stream_writer
-        && msg.cmd == AEL_MSG_CMD_REPORT_STATUS
+    if (msg.source_type == AUDIO_ELEMENT_TYPE_ELEMENT && msg.cmd == AEL_MSG_CMD_REPORT_STATUS
         && (((int)msg.data == AEL_STATUS_STATE_STOPPED) || ((int)msg.data == AEL_STATUS_STATE_FINISHED))) {
         ESP_LOGI(TAG, "i2s wants to stop!");
         schnuppel_stop(schnuppel);
+        return true;
     }
+
+    return false;
+}
+
+bool schnuppel_handle_event_snapclient_stream(schnuppel_handle_t schnuppel, audio_event_iface_msg_t msg)
+{
+    ESP_LOGI(TAG, "Handle event: Processing message from snapclient_stream ");
+    return false;
+}
+
+bool schnuppel_handle_event_opus_decoder(schnuppel_handle_t schnuppel, audio_event_iface_msg_t msg)
+{
+    ESP_LOGI(TAG, "Handle event: Processing message from opus_decoder ");
+    return false;
+}
+
+bool schnuppel_handle_event_bt_stream_reader(schnuppel_handle_t schnuppel, audio_event_iface_msg_t msg)
+{
+    ESP_LOGI(TAG, "Handle event: Processing message from bt_stream_reader ");
+    return false;
 }
 
 void schnuppel_stop(schnuppel_handle_t schnuppel)
@@ -376,72 +361,3 @@ void schnuppel_stop(schnuppel_handle_t schnuppel)
     audio_element_deinit(schnuppel->opus_decoder);
     audio_element_deinit(schnuppel->snapclient_stream);
 }
-
-#if 0
-
-void bt_app_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param)
-{
-    switch (event) {
-    case ESP_BT_GAP_AUTH_CMPL_EVT: {
-        if (param->auth_cmpl.stat == ESP_BT_STATUS_SUCCESS) {
-            ESP_LOGI(BT_AV_TAG, "authentication success: %s", param->auth_cmpl.device_name);
-            esp_log_buffer_hex(BT_AV_TAG, param->auth_cmpl.bda, ESP_BD_ADDR_LEN);
-        } else {
-            ESP_LOGE(BT_AV_TAG, "authentication failed, status:%d", param->auth_cmpl.stat);
-        }
-        break;
-    }
-    case ESP_BT_GAP_CFM_REQ_EVT:
-        ESP_LOGI(BT_AV_TAG, "ESP_BT_GAP_CFM_REQ_EVT Please compare the numeric value: %d", param->cfm_req.num_val);
-        esp_bt_gap_ssp_confirm_reply(param->cfm_req.bda, true);
-        break;
-    case ESP_BT_GAP_KEY_NOTIF_EVT:
-        ESP_LOGI(BT_AV_TAG, "ESP_BT_GAP_KEY_NOTIF_EVT passkey:%d", param->key_notif.passkey);
-        break;
-    case ESP_BT_GAP_KEY_REQ_EVT:
-        ESP_LOGI(BT_AV_TAG, "ESP_BT_GAP_KEY_REQ_EVT Please enter passkey!");
-        break;
-    default: {
-        ESP_LOGI(BT_AV_TAG, "event: %d", event);
-        break;
-    }
-    }
-    return;
-}
-static void bt_av_hdl_stack_evt(uint16_t event, void *p_param)
-{
-    ESP_LOGD(BT_AV_TAG, "%s evt %d", __func__, event);
-    switch (event) {
-    case BT_APP_EVT_STACK_UP: {
-        /* set up device name */
-        char *dev_name = "Schnuppel";
-        esp_bt_dev_set_device_name(dev_name);
-
-        esp_bt_gap_register_callback(bt_app_gap_cb);
-
-        /* initialize AVRCP controller */
-        esp_avrc_ct_init();
-        esp_avrc_ct_register_callback(bt_app_rc_ct_cb);
-        /* initialize AVRCP target */
-        assert (esp_avrc_tg_init() == ESP_OK);
-        esp_avrc_tg_register_callback(bt_app_rc_tg_cb);
-
-        esp_avrc_rn_evt_cap_mask_t evt_set = {0};
-        esp_avrc_rn_evt_bit_mask_operation(ESP_AVRC_BIT_MASK_OP_SET, &evt_set, ESP_AVRC_RN_VOLUME_CHANGE);
-        assert(esp_avrc_tg_set_rn_evt_cap(&evt_set) == ESP_OK);
-
-        /* initialize A2DP sink */
-        esp_a2d_register_callback(&bt_app_a2d_cb);
-        esp_a2d_sink_register_data_callback(bt_app_a2d_data_cb);
-        esp_a2d_sink_init();
-
-        /* set discoverable and connectable mode, wait to be connected */
-        esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
-        break;
-    }
-    default:
-        ESP_LOGE(BT_AV_TAG, "%s unhandled evt %d", __func__, event);
-        break;
-    }
-}
-#endif
