@@ -6,6 +6,11 @@
 
 static const char *TAG = "SCHNUPPEL";
 
+enum SchnuppelMode {
+    SCHNUPPEL_MODE_BT,
+    SCHNUPPEL_MODE_SNAPCLIENT
+};
+
 struct schnuppel_handle {
     audio_pipeline_handle_t pipeline;
     audio_element_handle_t i2s_stream_writer, opus_decoder, snapclient_stream, bt_stream_reader;
@@ -14,19 +19,14 @@ struct schnuppel_handle {
     esp_periph_handle_t wifi_handle;
     esp_periph_handle_t bt_periph;
     audio_event_iface_handle_t event_handle;
-    enum {
-        SCHNUPPEL_MODE_BT,
-        SCHNUPPEL_MODE_SNAPCLIENT
-    } mode;
+    enum SchnuppelMode mode;
 };
 
 typedef struct schnuppel_handle *schnuppel_handle_t;
 
 void schnuppel_start(schnuppel_handle_t schnuppel);
 
-void schnuppel_start_snapclient(schnuppel_handle_t schnuppel);
-
-void schnuppel_start_bt(schnuppel_handle_t schnuppel);
+void schnuppel_switch_mode(schnuppel_handle_t schnuppel, enum SchnuppelMode mode);
 
 void schnuppel_start_periph(schnuppel_handle_t schnuppel);
 

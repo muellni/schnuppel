@@ -150,20 +150,22 @@ bool schnuppel_event_handle_button_down(schnuppel_handle_t schnuppel, audio_even
 {
     ESP_LOGI(TAG, "Handle event: Processing message button down");
 
-    if ((int) msg.data == get_input_play_id()) {
-        ESP_LOGI(TAG, "[ * ] [Play] touch tap event");
-        return true;
-    } else if ((int) msg.data == get_input_set_id()) {
-        ESP_LOGI(TAG, "[ * ] [Set] touch tap event");
-        return true;
-    } else if ((int) msg.data == get_input_volup_id()) {
-        ESP_LOGI(TAG, "[ * ] [Vol+] touch tap event");
-        return true;
-    } else if ((int) msg.data == get_input_voldown_id()) {
-        ESP_LOGI(TAG, "[ * ] [Vol-] touch tap event");
-        return true;
+    switch ((int)msg.data) {
+        case TOUCH_SET:
+            ESP_LOGI(TAG, "  set touch set");
+            return true;
+        case TOUCH_PLAY:
+            ESP_LOGI(TAG, "  set touch play");
+            return true;
+        case TOUCH_VOLUP:
+            ESP_LOGI(TAG, "  set touch vol up");
+            schnuppel_switch_mode(schnuppel, SCHNUPPEL_MODE_SNAPCLIENT);
+            return true;
+        case TOUCH_VOLDWN:
+            ESP_LOGI(TAG, "  set touch vol down");
+            schnuppel_switch_mode(schnuppel, SCHNUPPEL_MODE_BT);
+            return true;
     }
-
     return false;
 }
 
@@ -201,11 +203,9 @@ bool schnuppel_event_handle_bt(schnuppel_handle_t schnuppel, audio_event_iface_m
         && msg.source == (void *)schnuppel->bt_periph) {
         if (msg.cmd == PERIPH_BLUETOOTH_CONNECTED) {
             ESP_LOGI(TAG, "Bluetooth connected");
-            //schnuppel_start_bt(schnuppel);
             return true;
         } else  if (msg.cmd == PERIPH_BLUETOOTH_DISCONNECTED) {
             ESP_LOGI(TAG, "Bluetooth disconnected");
-            //schnuppel_start_snapclient(schnuppel);
             return true;
         }
     }

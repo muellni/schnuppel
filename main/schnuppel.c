@@ -26,33 +26,30 @@ void schnuppel_start(schnuppel_handle_t schnuppel)
     schnuppel_start_time(schnuppel);
 }
 
-void schnuppel_start_snapclient(schnuppel_handle_t schnuppel)
-{
-    schnuppel_stop(schnuppel);
-
-    schnuppel_init_pipeline(schnuppel);
-    
-    schnuppel_init_pipeline_elements(schnuppel);
-    audio_pipeline_set_listener(schnuppel->pipeline, schnuppel->event_handle);
-
-    const char *link_tag[2] = {"snapclient", "i2s"};
-    audio_pipeline_link(schnuppel->pipeline, &link_tag[0], 2);
-
-    schnuppel_start_pipeline(schnuppel);
-}
-
-void schnuppel_start_bt(schnuppel_handle_t schnuppel)
+void schnuppel_switch_mode(schnuppel_handle_t schnuppel, enum SchnuppelMode mode)
 {
     schnuppel_stop(schnuppel);
 
     schnuppel_init_pipeline(schnuppel);
 
-    schnuppel_init_pipeline_elements(schnuppel);
-    
+    schnuppel_init_pipeline_elements(schnuppel);    
+
     audio_pipeline_set_listener(schnuppel->pipeline, schnuppel->event_handle);
     
-    const char *link_tag[2] = {"bt", "i2s"};
-    audio_pipeline_link(schnuppel->pipeline, &link_tag[0], 2);
+    switch (mode) {
+        case SCHNUPPEL_MODE_BT:
+            {
+                const char *link_tag[2] = {"bt", "i2s"};
+                audio_pipeline_link(schnuppel->pipeline, &link_tag[0], 2);
+            }
+            break;
+        case SCHNUPPEL_MODE_SNAPCLIENT:
+            {
+                const char *link_tag[2] = {"snapclient", "i2s"};
+                audio_pipeline_link(schnuppel->pipeline, &link_tag[0], 2);
+            }
+            break;
+    }
 
     schnuppel_start_pipeline(schnuppel);
 }
@@ -102,10 +99,12 @@ void schnuppel_stop(schnuppel_handle_t schnuppel)
     if (schnuppel->pipeline)
     {
         ESP_LOGW(TAG, "Stop audio_pipeline");
-        audio_pipeline_stop(schnuppel->pipeline);
-        audio_pipeline_wait_for_stop(schnuppel->pipeline);
-        audio_pipeline_terminate(schnuppel->pipeline);
-        audio_pipeline_remove_listener(schnuppel->pipeline);
+        //audio_pipeline_stop(schnuppel->pipeline);
+        //audio_pipeline_wait_for_stop(schnuppel->pipeline);
+        //audio_pipeline_terminate(schnuppel->pipeline);
+        //audio_pipeline_remove_listener(schnuppel->pipeline);
+        audio_pipeline_deinit(schnuppel->pipeline);
+        schnuppel->pipeline = NULL;
     }
 
     /*
