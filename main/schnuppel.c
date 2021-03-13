@@ -73,12 +73,6 @@ void schnuppel_init_bt(schnuppel_handle_t schnuppel)
 
     esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
 
-    a2dp_stream_config_t a2dp_config = {
-        .type = AUDIO_STREAM_READER,
-        .user_callback = {0},
-        .audio_hal = schnuppel->board->audio_hal,
-    };
-    schnuppel->bt_stream_reader = a2dp_stream_init(&a2dp_config);
 }
 
 void schnuppel_init_snapclient(schnuppel_handle_t schnuppel)
@@ -93,7 +87,7 @@ void schnuppel_init_snapclient(schnuppel_handle_t schnuppel)
 
 void schnuppel_init_opus(schnuppel_handle_t schnuppel)
 {
-    ESP_LOGI(TAG, "reate opus decoder");
+    ESP_LOGI(TAG, "Create opus decoder");
     opus_decoder_cfg_t opus_cfg = DEFAULT_OPUS_DECODER_CONFIG();
     schnuppel->opus_decoder = decoder_opus_init(&opus_cfg);
 }
@@ -110,7 +104,6 @@ void schnuppel_init_pipeline_elements(schnuppel_handle_t schnuppel)
 {
     ESP_LOGI(TAG, "Register all elements to audio pipeline");
     audio_pipeline_register(schnuppel->pipeline, schnuppel->snapclient_stream, "snapclient");
-    audio_pipeline_register(schnuppel->pipeline, schnuppel->bt_stream_reader, "bt");
     audio_pipeline_register(schnuppel->pipeline, schnuppel->opus_decoder, "opus");
     audio_pipeline_register(schnuppel->pipeline, schnuppel->i2s_stream_writer, "i2s");
 }
@@ -150,6 +143,8 @@ void schnuppel_init_event(schnuppel_handle_t schnuppel)
 
 void schnuppel_start_snapclient(schnuppel_handle_t schnuppel)
 {
+    schnuppel_stop_bt(schnuppel);
+    
     ESP_LOGI(TAG, "Linking snapclient to audio pipeline");
 
     const char *link_tag[2] = {"snapclient", "i2s"};
@@ -158,8 +153,18 @@ void schnuppel_start_snapclient(schnuppel_handle_t schnuppel)
 
 void schnuppel_start_bt(schnuppel_handle_t schnuppel)
 {
-    ESP_LOGI(TAG, "Linking bluetooth to audio pipeline");
+    schnuppel_stop_bt(schnuppel);
+    ESP_LOGI(TAG, "Init A2DP stream");
+    a2dp_stream_config_t a2dp_config = {
+        .type = AUDIO_STREAM_READER,
+        .user_callback = {0},
+        .audio_hal = schnuppel->board->audio_hal,
+    };
+    schnuppel->bt_stream_reader = a2dp_stream_init(&a2dp_config);
 
+    audio_pipeline_register(schnuppel->pipeline, schnuppel->bt_stream_reader, "bt");
+    
+    ESP_LOGI(TAG, "Linking bluetooth to audio pipeline");
     const char *link_tag[2] = {"bt", "i2s"};
     audio_pipeline_link(schnuppel->pipeline, &link_tag[0], 2);
 }
@@ -397,6 +402,16 @@ bool schnuppel_handle_event_bt(schnuppel_handle_t schnuppel, audio_event_iface_m
     return false;
 }
 
+void schnuppel_stop_bt(schnuppel_handle_t schnuppel) 
+{
+    a2dp_destroy();
+    if (schnuppel->bt_stream_reader) {
+	    audio_pipeline_unregister(schnuppel->pipeline, schnuppel->bt_stream_reader);
+        audio_element_deinit(schnuppel->bt_stream_reader);
+        schnuppel->bt_stream_reader = {0};
+    }
+}
+
 void schnuppel_stop(schnuppel_handle_t schnuppel)
 {
     ESP_LOGI(TAG, "Stop audio_pipeline");
@@ -408,7 +423,8 @@ void schnuppel_stop(schnuppel_handle_t schnuppel)
     esp_periph_set_stop_all(schnuppel->periph_set);
     audio_event_iface_remove_listener(esp_periph_set_get_event_iface(schnuppel->periph_set), schnuppel->event_handle);
 
-	audio_pipeline_unregister(schnuppel->pipeline, schnuppel->bt_stream_reader);
+    schnuppel_stop_bt(schnuppel);
+
 	audio_pipeline_unregister(schnuppel->pipeline, schnuppel->snapclient_stream);
     audio_pipeline_unregister(schnuppel->pipeline, schnuppel->opus_decoder);
     audio_pipeline_unregister(schnuppel->pipeline, schnuppel->i2s_stream_writer);
@@ -420,7 +436,6 @@ void schnuppel_stop(schnuppel_handle_t schnuppel)
     audio_event_iface_destroy(schnuppel->event_handle);
 
     audio_pipeline_deinit(schnuppel->pipeline);
-    audio_element_deinit(schnuppel->bt_stream_reader);
     audio_element_deinit(schnuppel->i2s_stream_writer);
     audio_element_deinit(schnuppel->opus_decoder);
     audio_element_deinit(schnuppel->snapclient_stream);
