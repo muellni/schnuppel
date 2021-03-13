@@ -2,7 +2,12 @@
 
 #include <sys/time.h>
 
+#include "a2dp_stream.h"
 #include "audio_mem.h"
+#include "esp_bt.h"
+#include "esp_bt_device.h"
+#include "esp_bt_main.h"
+#include "esp_gap_bt_api.h"
 #include "esp_log.h"
 #include "esp_peripherals.h"
 #include "i2s_stream.h"
@@ -19,6 +24,7 @@ schnuppel_handle_t schnuppel_init()
     result = audio_calloc(1, sizeof(struct schnuppel_handle));
     schnuppel_init_board(result);
     schnuppel_init_pipeline(result);
+    schnuppel_init_bt(result);
     schnuppel_init_snapclient(result);
     schnuppel_init_opus(result);
     schnuppel_init_i2s_stream(result);
@@ -31,6 +37,7 @@ schnuppel_handle_t schnuppel_init()
 void schnuppel_start(schnuppel_handle_t schnuppel)
 {
     schnuppel_start_snapclient(schnuppel);
+    //schnuppel_start_bt(schnuppel);
     schnuppel_start_periph(schnuppel);
     schnuppel_start_time(schnuppel);
     schnuppel_start_pipeline(schnuppel);
@@ -49,6 +56,29 @@ void schnuppel_init_pipeline(schnuppel_handle_t schnuppel)
     audio_pipeline_cfg_t pipeline_cfg = DEFAULT_AUDIO_PIPELINE_CONFIG();
     schnuppel->pipeline = audio_pipeline_init(&pipeline_cfg);
     mem_assert(schnuppel->pipeline);
+}
+
+void schnuppel_init_bt(schnuppel_handle_t schnuppel)
+{
+    ESP_LOGI(TAG, "Init Bluetooth");
+
+    ESP_ERROR_CHECK(esp_bt_controller_mem_release(ESP_BT_MODE_BLE));
+    esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK(esp_bt_controller_init(&bt_cfg));
+    ESP_ERROR_CHECK(esp_bt_controller_enable(ESP_BT_MODE_CLASSIC_BT));
+    ESP_ERROR_CHECK(esp_bluedroid_init());
+    ESP_ERROR_CHECK(esp_bluedroid_enable());
+
+    esp_bt_dev_set_device_name("Schnuppel");
+
+    esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
+
+    a2dp_stream_config_t a2dp_config = {
+        .type = AUDIO_STREAM_READER,
+        .user_callback = {0},
+        .audio_hal = schnuppel->board->audio_hal,
+    };
+    schnuppel->bt_stream_reader = a2dp_stream_init(&a2dp_config);
 }
 
 void schnuppel_init_snapclient(schnuppel_handle_t schnuppel)
@@ -80,7 +110,7 @@ void schnuppel_init_pipeline_elements(schnuppel_handle_t schnuppel)
 {
     ESP_LOGI(TAG, "Register all elements to audio pipeline");
     audio_pipeline_register(schnuppel->pipeline, schnuppel->snapclient_stream, "snapclient");
-    //audio_pipeline_register(schnuppel->pipeline, schnuppel->bt_stream_reader, "bt");
+    audio_pipeline_register(schnuppel->pipeline, schnuppel->bt_stream_reader, "bt");
     audio_pipeline_register(schnuppel->pipeline, schnuppel->opus_decoder, "opus");
     audio_pipeline_register(schnuppel->pipeline, schnuppel->i2s_stream_writer, "i2s");
 }
@@ -100,6 +130,9 @@ void schnuppel_init_periph(schnuppel_handle_t schnuppel)
 
     ESP_LOGI(TAG, "Initialize Wifi peripheral");
     schnuppel->wifi_handle = periph_wifi_init(&wifi_cfg);
+
+    ESP_LOGI(TAG, "Initialize Bluetooth peripheral");
+    schnuppel->bt_periph = bt_create_periph();
 }
 
 void schnuppel_init_event(schnuppel_handle_t schnuppel)
@@ -123,9 +156,22 @@ void schnuppel_start_snapclient(schnuppel_handle_t schnuppel)
     audio_pipeline_link(schnuppel->pipeline, &link_tag[0], 2);
 }
 
+void schnuppel_start_bt(schnuppel_handle_t schnuppel)
+{
+    ESP_LOGI(TAG, "Linking bluetooth to audio pipeline");
+
+    const char *link_tag[2] = {"bt", "i2s"};
+    audio_pipeline_link(schnuppel->pipeline, &link_tag[0], 2);
+}
+
 void schnuppel_start_periph(schnuppel_handle_t schnuppel)
 {
-    ESP_LOGI(TAG, "Start the Wi-Fi network");
+    ESP_LOGI(TAG, "Start all peripherals");
+
+    ESP_LOGI(TAG, "  Bluetooth");
+    esp_periph_start(schnuppel->periph_set, schnuppel->bt_periph);
+
+    ESP_LOGI(TAG, "  Wi-Fi network");
     esp_periph_start(schnuppel->periph_set, schnuppel->wifi_handle);
     ESP_LOGI(TAG, "wait for connection");
 	while (1) {
@@ -134,6 +180,7 @@ void schnuppel_start_periph(schnuppel_handle_t schnuppel)
 			break;
 		ESP_LOGW(TAG, "still waiting for connection");
 	}
+
 }
 
 void schnuppel_start_time(schnuppel_handle_t schnuppel)
@@ -189,8 +236,8 @@ void schnuppel_handle_event(schnuppel_handle_t schnuppel)
         handled = schnuppel_handle_event_snapclient_stream(schnuppel, msg);
     } else if (msg.source == (void *) schnuppel->opus_decoder) {
         handled = schnuppel_handle_event_opus_decoder(schnuppel, msg);
-    } else if (msg.source == (void *) schnuppel->bt_stream_reader) {
-        handled = schnuppel_handle_event_bt_stream_reader(schnuppel, msg);
+    } else if (msg.source == (void *) schnuppel->bt_stream_reader || msg.source == (void *) schnuppel->bt_periph) {
+        handled = schnuppel_handle_event_bt(schnuppel, msg);
     }
     else {
         ESP_LOGE(TAG, "Handle event: unknown source");
@@ -258,6 +305,9 @@ void schnuppel_handle_event(schnuppel_handle_t schnuppel)
                 break;
         }
     }
+    if (!handled) {
+        ESP_LOGE(TAG, "Handle event: unhandled event");
+    }
 }
 
 bool schnuppel_handle_event_audio_element_type(schnuppel_handle_t schnuppel, audio_event_iface_msg_t msg)
@@ -265,11 +315,12 @@ bool schnuppel_handle_event_audio_element_type(schnuppel_handle_t schnuppel, aud
     ESP_LOGI(TAG, "Handle event: Processing message AUDIO_ELEMENT_TYPE_ELEMENT");
 
     if (msg.cmd == AEL_MSG_CMD_REPORT_MUSIC_INFO) {
-        ESP_LOGI(TAG, "  report music info ");
         audio_element_info_t music_info = {0};
         audio_element_getinfo(msg.source, &music_info);
 
-        //audio_element_setinfo(schnuppel->opus_decoder, &music_info);
+        ESP_LOGI(TAG, "  receive music info: sample_rates=%d, bits=%d, ch=%d",
+                    music_info.sample_rates, music_info.bits, music_info.channels);
+
         audio_element_setinfo(schnuppel->i2s_stream_writer, &music_info);
 
         i2s_stream_set_clk(schnuppel->i2s_stream_writer, music_info.sample_rates , music_info.bits, music_info.channels);
@@ -282,7 +333,7 @@ bool schnuppel_handle_event_audio_element_type(schnuppel_handle_t schnuppel, aud
 
 bool schnuppel_handle_event_button_down(schnuppel_handle_t schnuppel, audio_event_iface_msg_t msg)
 {
-    ESP_LOGI(TAG, "Handle event: Processing message AUDIO_ELEMENT_TYPE_ELEMENT");
+    ESP_LOGI(TAG, "Handle event: Processing message button down");
 
     if ((int) msg.data == get_input_play_id()) {
         ESP_LOGI(TAG, "[ * ] [Play] touch tap event");
@@ -328,9 +379,21 @@ bool schnuppel_handle_event_opus_decoder(schnuppel_handle_t schnuppel, audio_eve
     return false;
 }
 
-bool schnuppel_handle_event_bt_stream_reader(schnuppel_handle_t schnuppel, audio_event_iface_msg_t msg)
+bool schnuppel_handle_event_bt(schnuppel_handle_t schnuppel, audio_event_iface_msg_t msg)
 {
-    ESP_LOGI(TAG, "Handle event: Processing message from bt_stream_reader ");
+    ESP_LOGI(TAG, "Handle event: Processing message from bt");
+    if (msg.source_type == PERIPH_ID_BLUETOOTH
+        && msg.source == (void *)schnuppel->bt_periph) {
+        if (msg.cmd == PERIPH_BLUETOOTH_CONNECTED) {
+            ESP_LOGW(TAG, "Bluetooth connected");
+            schnuppel_start_bt(schnuppel);
+            return true;
+        } else  if (msg.cmd == PERIPH_BLUETOOTH_DISCONNECTED) {
+            ESP_LOGW(TAG, "Bluetooth disconnected");
+            schnuppel_start_snapclient(schnuppel);
+            return true;
+        }
+    }
     return false;
 }
 
@@ -340,7 +403,12 @@ void schnuppel_stop(schnuppel_handle_t schnuppel)
     audio_pipeline_stop(schnuppel->pipeline);
     audio_pipeline_wait_for_stop(schnuppel->pipeline);
     audio_pipeline_terminate(schnuppel->pipeline);
+    audio_pipeline_remove_listener(schnuppel->pipeline);
 
+    esp_periph_set_stop_all(schnuppel->periph_set);
+    audio_event_iface_remove_listener(esp_periph_set_get_event_iface(schnuppel->periph_set), schnuppel->event_handle);
+
+	audio_pipeline_unregister(schnuppel->pipeline, schnuppel->bt_stream_reader);
 	audio_pipeline_unregister(schnuppel->pipeline, schnuppel->snapclient_stream);
     audio_pipeline_unregister(schnuppel->pipeline, schnuppel->opus_decoder);
     audio_pipeline_unregister(schnuppel->pipeline, schnuppel->i2s_stream_writer);
@@ -351,13 +419,17 @@ void schnuppel_stop(schnuppel_handle_t schnuppel)
     /* Make sure audio_pipeline_remove_listener is called before destroying event_iface */
     audio_event_iface_destroy(schnuppel->event_handle);
 
-    /* Release all resources */
-	/* D: still neeeded?
-    audio_pipeline_unregister(pipeline, i2s_stream_writer);
-    audio_pipeline_unregister(pipeline, opus_decoder);
-	*/
     audio_pipeline_deinit(schnuppel->pipeline);
+    audio_element_deinit(schnuppel->bt_stream_reader);
     audio_element_deinit(schnuppel->i2s_stream_writer);
     audio_element_deinit(schnuppel->opus_decoder);
     audio_element_deinit(schnuppel->snapclient_stream);
+
+    esp_periph_set_destroy(schnuppel->periph_set);
+
+    esp_bluedroid_disable();
+    esp_bluedroid_deinit();
+    esp_bt_controller_disable();
+    esp_bt_controller_deinit();
+    esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT);
 }
