@@ -23,6 +23,8 @@ void app_main(void)
 
     schnuppel_handle_t schnuppel = schnuppel_init();
     schnuppel_start(schnuppel);
+    schnuppel_start_snapclient(schnuppel);
+    schnuppel_start_bt(schnuppel);
     while(1) {
         schnuppel_handle_event(schnuppel);
     }
